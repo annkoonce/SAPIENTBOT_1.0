@@ -15,13 +15,13 @@ import logging
 import openai
 import serpapi 
 from serpapi import GoogleSearch
+import random
 from datetime import datetime, timedelta
 import unittest
 from unittest.mock import MagicMock
 from googlesearch import search
 import time
 import logging
-import SB_usertracking
 
 # Load environment variables
 load_dotenv()
@@ -100,37 +100,6 @@ class GamificationSystem:
 # Create instances of RLModule and GamificationSystem
 gamification = GamificationSystem()
 
-# Riddles database
-riddles = {
-    'easy': [
-        {"question": "What has to be broken before you can use it?", "answer": "egg"},
-        {"question": "I’m tall when I’m young, and I’m short when I’m old. What am I?", "answer": "candle"}
-    ],
-    'intermediate': [
-        {"question": "What month of the year has 28 days?", "answer": "all of them"},
-        {"question": "What is full of holes but still holds water?", "answer": "sponge"}
-    ],
-    'hard': [
-        {"question": "What question can you never answer yes to?", "answer": "are you asleep"},
-        {"question": "What gets wetter the more it dries?", "answer": "towel"}
-    ],
-    'professional': [
-        {"question": "What can travel around the world while staying in the corner?", "answer": "stamp"},
-        {"question": "The more of this there is, the less you see. What is it?", "answer": "darkness"}
-    ]
-}
-
-# Points for difficulty
-points = {
-    'easy': 5,
-    'intermediate': 10,
-    'hard': 15,
-    'professional': 20
-}
-
-# Active riddles and users' answers
-active_riddles = {}
-
 # Bot Token and API keys
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
@@ -138,6 +107,9 @@ SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
 SERP_API_ID = os.getenv('SERP_API_ID')
 OPEN_API_ID = os.getenv('OPEN_API_ID')
+
+# File to store user data
+USER_DATA_FILE = 'user_data.json'
 
 # Flask app for OAuth callback
 app = Flask(__name__)
@@ -159,28 +131,72 @@ farewells = [{"LOWER": "bye"}, {"LOWER": "goodbye"}, {"LOWER": "see"}, {"LOWER":
 matcher.add("GREETING", [greetings])
 matcher.add("FAREWELL", [farewells])
 
-# Bot Setup
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+# Create bot object
+bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+
+# Riddles database
+riddles = {
+    'easy': [
+        {"question": "What has to be broken before you can use it?", "answer": "egg"},
+        {"question": "I’m tall when I’m young, and I’m short when I’m old. What am I?", "answer": "candle"},
+        {"question": "What has legs but doesn’t walk?", "answer": "table"},
+        {"question": "What is full of holes but still holds water?", "answer": "sponge"},
+        {"question": "What runs, but never walks?", "answer": "water"},
+        {"question": "What has ears but cannot hear?", "answer": "corn"}
+    ],
+    'intermediate': [
+        {"question": "What month of the year has 28 days?", "answer": "all of them"},
+        {"question": "What is full of holes but still holds water?", "answer": "sponge"},
+        {"question": "What can travel around the world while staying in one spot?", "answer": "stamp"},
+        {"question": "I have branches, but no fruit, trunk, or leaves. What am I?", "answer": "bank"},
+        {"question": "If you drop me, I’m sure to crack, but smile at me and I’ll smile back. What am I?", "answer": "mirror"},
+        {"question": "The more of this there is, the less you see. What is it?", "answer": "darkness"},
+        {"question": "I shave every day, but my beard stays the same. What am I?", "answer": "barber"}
+    ],
+    'hard': [
+        {"question": "What question can you never answer yes to?", "answer": "are you asleep"},
+        {"question": "What gets wetter the more it dries?", "answer": "towel"},
+        {"question": "What has a head, a tail, is brown, and has no legs?", "answer": "penny"},
+        {"question": "A man is pushing his car along a road when he comes to a hotel. He shouts, 'I'm bankrupt!' Why?", "answer": "He's playing Monopoly."},
+        {"question": "The eight of us go forth not back to protect our king from a foe’s attack. What are we?", "answer": "chess pawns"},
+        {"question": "I am not alive, but I grow; I don’t have lungs, but I need air; I don’t have a mouth, but water kills me. What am I?", "answer": "fire"},
+        {"question": "What flies without wings?", "answer": "time"}
+    ],
+    'professional': [
+        {"question": "What can travel around the world while staying in the corner?", "answer": "stamp"},
+        {"question": "The more of this there is, the less you see. What is it?", "answer": "darkness"},
+        {"question": "What can bring back the dead, make you cry, make you laugh, make you young, is born in an instant, yet lasts a lifetime?", "answer": "memory"},
+        {"question": "I’m not alive, but I can grow; I don’t have lungs, but I need air; I don’t have a mouth, and yet water kills me. What am I?", "answer": "fire"},
+        {"question": "First you eat me, then you get eaten. What am I?", "answer": "fishhook"},
+        {"question": "It cannot be seen, cannot be felt, cannot be heard, cannot be smelt. It lies behind stars and under hills, and empty holes it fills. It comes first and follows after, ends life, kills laughter. What is it?", "answer": "dark"},
+        {"question": "I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?", "answer": "echo"}
+    ]
+}
+
+# Points for difficulty
+points = {
+    'easy': 5,
+    'intermediate': 10,
+    'hard': 15,
+    'professional': 20
+}
+
+# Active riddles and users' answers
+active_riddles = {}
 
 # Command to give a riddle based on difficulty
 @bot.command(name='riddle')
 async def riddle_command(ctx, difficulty: str):
-    # Track user interaction
-    if difficulty not in riddles:
-        await ctx.send(f"Invalid difficulty level. Choose from: {', '.join(riddles.keys())}")
-        return
-    
+    user_name = ctx.author.display_name  # Get the user's display name
+
     # Select a random riddle from the specified difficulty level
     riddle = random.choice(riddles[difficulty])
     active_riddles[ctx.author.id] = {'question': riddle['question'], 'answer': riddle['answer'], 'difficulty': difficulty}
     
-    # Send the riddle to the user
-    await ctx.send(f"Here's your {difficulty} riddle: {riddle['question']}")
+  # Send the riddle to the user with their name
+    await ctx.send(f"{user_name}, here's your {difficulty} riddle: {riddle['question']}")
     await ctx.send("Reply with the correct answer!")
-
+    
 # Command to check the user's answer
 @bot.command(name='answer')
 async def answer_command(ctx, *, user_answer: str):
@@ -206,6 +222,90 @@ async def answer_command(ctx, *, user_answer: str):
 
     # Remove the active riddle for the user
     del active_riddles[user_id]
+
+# Track when each user last used the !quiz command
+user_last_quiz_time = {}
+
+# Store active quizzes and their answers for each user
+active_quizzes = {}
+
+# Quiz cooldown time (1 day)
+QUIZ_COOLDOWN = timedelta(days=1)
+
+# Command to initiate a quiz
+@bot.command(name='quiz')
+async def quiz_command(ctx):
+    user_id = ctx.author.id
+    now = datetime.now()
+
+    # Check if user has already taken the quiz today
+    if user_id in user_last_quiz_time:
+        last_quiz_time = user_last_quiz_time[user_id]
+        if now - last_quiz_time < QUIZ_COOLDOWN:
+            time_remaining = QUIZ_COOLDOWN - (now - last_quiz_time)
+            await ctx.send(f"You've already taken the quiz today. Please try again in {time_remaining.seconds // 3600} hours.")
+            return
+
+    # Pick a random difficulty and question
+    difficulty = random.choice(list(riddles.keys()))
+    riddle = random.choice(riddles[difficulty])
+
+    # Store the question and answer for the user
+    active_quizzes[user_id] = {'question': riddle['question'], 'answer': riddle['answer'], 'time': now}
+
+    # Send the quiz question to the user
+    await ctx.send(f"Here's your quiz question: {riddle['question']}")
+    await ctx.send("Reply with the correct answer using the `!quiz_answer` command!")
+
+# Command to answer the quiz
+@bot.command(name='quiz_answer')
+async def quiz_answer_command(ctx, *, user_answer: str):
+    user_id = ctx.author.id
+
+    # Check if the user has an active quiz
+    if user_id not in active_quizzes:
+        await ctx.send("You don't have an active quiz. Use the `!quiz` command to get a question.")
+        return
+
+    # Get the stored quiz question and answer
+    quiz_data = active_quizzes[user_id]
+    correct_answer = quiz_data['answer'].lower()
+    now = datetime.now()
+
+    # Check if the answer is correct
+    if user_answer.lower() == correct_answer:
+        # Reward the user with 100 points
+        gamification.reward_user(user_id, 100)
+        total_points = gamification.get_user_rewards(user_id)
+
+        await ctx.send(f"Correct! You've earned 100 points. Your total points: {total_points}")
+
+        # Update the last quiz time for the user
+        user_last_quiz_time[user_id] = now
+    else:
+        await ctx.send(f"Sorry, that's incorrect. The correct answer was: {correct_answer}")
+
+    # Remove the active quiz for the user
+    del active_quizzes[user_id]
+
+# Prevent command spam
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return  # Ignore the bot's own messages
+
+    # Check for quiz spam
+    if message.content.startswith('!quiz'):
+        user_id = message.author.id
+        now = datetime.now()
+        if user_id in user_last_quiz_time:
+            last_quiz_time = user_last_quiz_time[user_id]
+            if now - last_quiz_time < QUIZ_COOLDOWN:
+                await message.channel.send(f"You've already taken the quiz today. Please wait until tomorrow.")
+                return
+
+    # Process commands
+    await bot.process_commands(message)
 
 # Command to check the user's points
 @bot.command(name='points')
@@ -404,6 +504,15 @@ async def spotify_top_tracks(ctx, *, artist_name: str):
     else:
         await ctx.send(f"Artist {artist_name} not found.")
 
+@bot.command(name='spotify_pause')
+async def spotify_pause(ctx):
+    devices = sp.devices()
+    if devices['devices']:
+        sp.pause_playback()
+        await ctx.send("Spotify playback paused.")
+    else:
+        await ctx.send("No active Spotify devices found.")
+
 # 4. !authorize_spotify: Initiates the Spotify OAuth authorization process.
 @bot.command(name='authorize_spotify')
 async def authorize_spotify(ctx):
@@ -426,6 +535,42 @@ async def spotify_play(ctx):
     else:
         sp_user.start_playback()
         await ctx.send("Playback started!")
+
+# Command to join the voice channel
+@bot.command(name='join')
+async def join_voice(ctx):
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        await channel.connect()
+        await ctx.send(f"Joined {channel}")
+    else:
+        await ctx.send("You need to be in a voice channel to use this command.")
+
+# Command to leave the voice channel
+@bot.command(name='leave')
+async def leave_voice(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Disconnected from the voice channel.")
+    else:
+        await ctx.send("I'm not in a voice channel!")
+
+# Command to play a track from Spotify in the VC
+@bot.command(name='play_spotify')
+async def play_spotify(ctx, *, track_name: str):
+    # Search for the track on Spotify
+    results = sp.search(q=track_name, type='track', limit=1)
+    if results['tracks']['items']:
+        track = results['tracks']['items'][0]
+        track_url = track['external_urls']['spotify']
+        await ctx.send(f"Playing {track['name']} by {track['artists'][0]['name']} - {track_url}")
+        
+        # If bot is connected to a VC, stream music (Note: Spotify playback API does not directly support streaming into Discord VC)
+        if ctx.voice_client:
+            await ctx.send("Sorry, Spotify API doesn't allow streaming directly into Discord VC.")
+            # You'll need another way to play audio, such as using FFMPEG or local files.
+    else:
+        await ctx.send("Couldn't find that track on Spotify.")
 
 # Check if 'ask' command is already registered
 existing_command = bot.get_command('ask')
@@ -507,7 +652,7 @@ async def profile_command(ctx):
         await ctx.send(f"Congratulations {ctx.author.name}, you've been rewarded 5 points! Total points: {total_points + 5}")
         rl_module.update_q_table(user_state, action, reward=1)  # Reward the bot for the successful action
     elif action == 'provide_tip':
-        await ctx.send(f"Tip: Keep engaging with the bot to earn more points and rewards!")
+        await ctx.send(f"Tip: Keep engaging with me to earn more points and rewards!")
         rl_module.update_q_table(user_state, action, reward=0.5)  # Partial reward for providing useful info
     else:
         await ctx.send(f"Here's your profile, {ctx.author.name}:\nTotal points: {total_points}, Level: {level}, Badges: {badge_str}")
@@ -551,12 +696,22 @@ async def on_message(message):
     if message.author == bot.user:
         return  # Ignore the bot's own messages
 
+    user_id = str(message.author.id)
+    
+    # Check if the message is a command and skip sentiment analysis
+    if message.content.startswith('!'):
+        # Process the command and skip greeting and sentiment logic
+        await bot.process_commands(message)
+        return
+
+    # Check if the message is a DM (direct message)
     if isinstance(message.channel, discord.DMChannel):
         # Respond to messages directly in private messages
         response = handle_greetings(message.content)
         if response:
             await message.channel.send(response)
         else:
+            # If not a greeting, proceed with sentiment analysis
             sentiment = analyze_sentiment(message.content)
             if sentiment == "positive":
                 await message.channel.send("I'm glad you're feeling great! How can I assist you?")
@@ -564,14 +719,25 @@ async def on_message(message):
                 await message.channel.send("I'm sorry to hear that. Is there anything I can do to help?")
             else:
                 await message.channel.send("How can I assist you today?")
-    elif bot.user.mentioned_in(message):
-        # Respond to messages if @mentioned in a server
-        response = handle_greetings(message.content)
-        if response:
-            await message.channel.send(response)
+    
+    # Check if the bot is mentioned in a server
+    elif bot.user in message.mentions:
+        user_id = message.author.id
+        
+        # Greet the user by their username if they haven't been greeted yet
+        if user_id not in user_greeted:
+            username = message.author.name
+            await message.channel.send(f"Hello, {username}! How can I assist you today?")
+            user_greeted.add(user_id)  # Mark the user as greeted
         else:
-            await message.channel.send("Hello! You mentioned me? How can I assist you today?")
+            # Proceed with other interactions as usual after the first greeting
+            response = handle_greetings(message.content)
+            if response:
+                await message.channel.send(response)
+            else:
+                await message.channel.send("How can I assist you today?")
 
+    # Ensure all other bot commands are processed
     await bot.process_commands(message)
 
 # Error Handling
