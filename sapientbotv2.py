@@ -133,6 +133,35 @@ matcher.add("FAREWELL", [farewells])
 
 # Create bot object
 bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+user_greeted = set()
+
+# List of custom greetings for specific users
+custom_greetings = {
+    'ColorsAndLights': 'Ara ara, ColorsAndLights-kun~',
+    'kilanaann': 'Hello Mother-unit!',
+    'itsbiskitty': 'I have been trying to contact you about your card extended warranty.'
+    # Add more custom greetings here for other users
+}
+@bot.event
+async def on_ready():
+    print(f'{bot.user.name} has connected to Discord!')
+
+# Event listener for when a message is sent and the bot is mentioned
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return  # Ignore bot's own messages
+
+    # Check if the bot is mentioned and if the user has a custom greeting
+    if bot.user in message.mentions:
+        if message.author.name in custom_greetings:
+            # Check if the user has already been greeted to avoid multiple greetings
+            if message.author.id not in user_greeted:
+                await message.channel.send(custom_greetings[message.author.name])
+                user_greeted.add(message.author.id)  # Add user to greeted set
+
+    # Process commands if any are used
+    await bot.process_commands(message)
 
 # Riddles database
 riddles = {
