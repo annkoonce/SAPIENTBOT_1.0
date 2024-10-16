@@ -20,11 +20,7 @@ from unittest.mock import MagicMock
 import time
 import logging
 import openai
-import serpapi
-from googlesearch import search
 import json
-import google
-
 
 # Load environment variables
 load_dotenv()
