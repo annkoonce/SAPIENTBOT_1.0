@@ -13,15 +13,17 @@ import threading
 import webbrowser
 import logging
 import openai
-import serpapi 
-from serpapi import GoogleSearch
 import random
 from datetime import datetime, timedelta
 import unittest
 from unittest.mock import MagicMock
-from googlesearch import search
 import time
 import logging
+import openai
+from googlesearch import search
+import json
+import google
+
 
 # Load environment variables
 load_dotenv()
@@ -609,10 +611,10 @@ if existing_command:
     bot.remove_command('ask')
 
 # Function to ask OpenAI
-def ask_openai(question):
+async def ask_openai(question):
     try:
         response = openai.Completion.create(
-            engine="text-davinci-003",
+            engine="text-davinci-003",  # Ensure the model name is correct
             prompt=question,
             max_tokens=100
         )
@@ -620,44 +622,32 @@ def ask_openai(question):
     except Exception as e:
         return f"Error with OpenAI: {str(e)}"
 
-# Function to ask SerpApi
-def ask_serpapi(query):
-    try:
-        params = {
-            "q": query,
-            "api_key": os.getenv('SERP_API_ID'),
-            "num": 1  # Limit to one result
-        }
-        search = GoogleSearch(params)
-        result = search.get_dict()
-
-        # Extract snippet or result from the response
-        snippet = result.get('organic_results', [{}])[0].get('snippet', 'No answer found.')
-        return snippet
-    except Exception as e:
-        return f"Error with SerpApi: {str(e)}"
-
-# Register a command to ask OpenAI and SerpApi
+# Register a command to ask OpenAI
 @bot.command(name='ask')
 async def ask_question(ctx, *, question: str):
-    # First try OpenAI, fallback to SerpApi if needed
-    response_openai = ask_openai(question)
-    
+    # First try OpenAI
+    await ctx.send("Let me think...")
+
+    response_openai = await ask_openai(question)
+
     if response_openai and "Error" not in response_openai:
         main_answer = response_openai
     else:
-        main_answer = ask_serpapi(question)
+        main_answer = "I couldn't get a proper answer from OpenAI."
 
     # Search for related articles/links based on the question using Google search
     related_links = []
-    for link in search(question, num_results=3):  # You can adjust the number of results
-        related_links.append(link)
+    try:
+        for link in search(question, num_results=3):  # You can adjust the number of results
+            related_links.append(link)
+    except Exception as e:
+        related_links = [f"Error fetching related links: {str(e)}"]
 
     # Build the final response
-    response = f"{main_answer}\n\nHere are some related links for further reading:\n"
+    response = f"**OpenAI's Response:**\n{main_answer}\n\n**Here are some related links for further reading:**\n"
     for idx, link in enumerate(related_links, 1):
         response += f"{idx}. {link}\n"
-    
+
     # Send the response back to the user
     await ctx.send(response)
 
