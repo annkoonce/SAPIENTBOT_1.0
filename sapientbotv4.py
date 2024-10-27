@@ -15,12 +15,19 @@ import logging
 import openai
 import random
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
 import unittest
 from unittest.mock import MagicMock
 import time
 import logging
 import openai
+from googlesearch import search
 import json
+import google
+import requests
+import praw
+import webbrowser
+
 
 # Load environment variables
 load_dotenv()
@@ -132,6 +139,9 @@ matcher.add("FAREWELL", [farewells])
 
 # Create bot object
 bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+description = "I'm SapientBot! Here to help you with you all your questions, pay compliments and roll D20's. Please see the information below."
+help_command = "!help"
+
 user_greeted = set()
 
 # List of custom greetings for specific users
@@ -221,7 +231,7 @@ async def riddle_command(ctx, difficulty: str):
     riddle = random.choice(riddles[difficulty])
     active_riddles[ctx.author.id] = {'question': riddle['question'], 'answer': riddle['answer'], 'difficulty': difficulty}
     
-  # Send the riddle to the user with their name
+# Send the riddle to the user with their name
     await ctx.send(f"{user_name}, here's your {difficulty} riddle: {riddle['question']}")
     await ctx.send("Reply with the correct answer!")
     
@@ -385,6 +395,126 @@ greetings_responses = {
     "welcome": "Thank you! What can I help you with?",
     "how do you do": "I'm doing well, how about you?"
 }
+# ============================
+# Fun Commands Category
+# ============================
+@bot.group(name='fun', invoke_without_command=True)
+async def fun(ctx):
+    """🎉 Fun commands to lighten up your day!"""
+    await ctx.send_help(ctx.command)   
+# 1. Magic 8-Ball
+@bot.command(name='8ball')
+async def magic_8ball(ctx, *, question: str):
+    responses = [
+        "It is certain.", "It is decidedly so.", "Without a doubt.",
+        "Yes – definitely.", "You may rely on it.", "As I see it, yes.",
+        "Most likely.", "Outlook good.", "Yes.", "Signs point to yes.",
+        "Reply hazy, try again.", "Ask again later.", "Better not tell you now.",
+        "Cannot predict now.", "Concentrate and ask again.",
+        "Don't count on it.", "My reply is no.", "My sources say no.",
+        "Outlook not so good.", "Very doubtful."
+    ]
+    await ctx.send(f"🎱 {random.choice(responses)}")
+
+# 2. Coin Flip
+@bot.command(name='flip')
+async def coin_flip(ctx):
+    outcome = random.choice(['Heads', 'Tails'])
+    await ctx.send(f"🪙 The coin landed on: **{outcome}**!")
+
+# 3. Dice Roll
+@bot.command(name='roll')
+async def roll_dice(ctx, dice: str):
+    try:
+        rolls, sides = map(int, dice.split('d'))
+        results = [random.randint(1, sides) for _ in range(rolls)]
+        await ctx.send(f"🎲 You rolled: {results} (Total: {sum(results)})")
+    except ValueError:
+        await ctx.send("Please use the format XdY (e.g., 2d6 for rolling two 6-sided dice).")
+
+# 6. Trivia Game
+@bot.command(name='trivia')
+async def trivia(ctx):
+    url = "https://opentdb.com/api.php?amount=1&type=multiple"
+    response = requests.get(url).json()
+
+    if response['response_code'] == 0:
+        question = response['results'][0]['question']
+        options = response['results'][0]['incorrect_answers']
+        options.append(response['results'][0]['correct_answer'])
+        random.shuffle(options)
+        options_str = "\n".join([f"{idx + 1}. {opt}" for idx, opt in enumerate(options)])
+
+        await ctx.send(f"🧠 Trivia Time!\n{question}\n\n{options_str}\n\nType the number of your answer.")
+        
+        def check(m):
+            return m.author == ctx.author and m.content.isdigit()
+
+        try:
+            answer = await bot.wait_for('message', check=check, timeout=15.0)
+            if options[int(answer.content) - 1] == response['results'][0]['correct_answer']:
+                await ctx.send("🎉 Correct! Great job.")
+            else:
+                await ctx.send(f"❌ Sorry, the correct answer was: {response['results'][0]['correct_answer']}")
+        except:
+            await ctx.send("⏰ Time's up!")
+    else:
+        await ctx.send("Couldn't fetch a trivia question. Try again later.")
+
+# 7. Motivational Quotes
+@bot.command(name='motivate')
+async def motivate(ctx):
+    quotes = [
+        "Believe you can and you're halfway there.",
+        "It always seems impossible until it’s done.",
+        "You are stronger than you think.",
+        "Keep going, you're doing amazing.",
+        "Success is not final, failure is not fatal: it is the courage to continue that counts."
+    ]
+    await ctx.send(f"💪 {random.choice(quotes)}")
+
+# 8. Dad Joke Generator
+@bot.command(name='dadjoke')
+async def dad_joke(ctx):
+    headers = {'Accept': 'application/json'}
+    response = requests.get("https://icanhazdadjoke.com/", headers=headers).json()
+    if 'joke' in response:
+        await ctx.send(f"🤣 {response['joke']}")
+    else:
+        await ctx.send("Couldn't get a joke right now, try again later!")
+
+# 9. Random Compliment
+@bot.command(name='compliment')
+async def compliment(ctx, *, member: discord.Member = None):
+    if member is None:
+        member = ctx.author
+
+    compliments = [
+        "You're an amazing person!", "You light up the room!", "Your smile is contagious.",
+        "You have the best laugh!", "You bring out the best in other people."
+    ]
+    await ctx.send(f"{member.mention}, {random.choice(compliments)}")
+
+# 10. Rock, Paper, Scissors Game
+@bot.command(name='rps')
+async def rock_paper_scissors(ctx, choice: str):
+    bot_choice = random.choice(['rock', 'paper', 'scissors'])
+    choice = choice.lower()
+    
+    if choice not in ['rock', 'paper', 'scissors']:
+        await ctx.send("Please choose 'rock', 'paper', or 'scissors'.")
+        return
+
+    if choice == bot_choice:
+        result = "It's a tie!"
+    elif (choice == 'rock' and bot_choice == 'scissors') or \
+         (choice == 'paper' and bot_choice == 'rock') or \
+         (choice == 'scissors' and bot_choice == 'paper'):
+        result = "You win! 🎉"
+    else:
+        result = "I win! 😎"
+
+    await ctx.send(f"You chose {choice}, I chose {bot_choice}. {result}")
 
 # Handle Natural Conversation with Sentiment Awareness and context-based responses# Command to handle natural conversation with sentiment awareness and greeting responses
 @bot.command(name='talk')
@@ -472,97 +602,64 @@ def parse_command(text):
     tokens = [(token.text, token.pos_) for token in doc]  # Tokenize text
     return entities, tokens
 
-# Spotify OAuth route
-@app.route('/callback')
-def callback():
-    global spotify_token
-    token_info = sp_oauth.get_access_token(request.args['code'])
-    spotify_token = token_info['access_token']
-    return "Spotify Authorization successful! You can close this tab and return to Discord."
 
-### Spotify Commands
-# 1. !spotify_current: Displays the current track playing on Spotify.
-@bot.command(name='spotify_current')
-async def spotify_current_track(ctx):
-    """Displays the current playing track on Spotify."""
-    results = sp.current_playback()
-    if results and results['is_playing']:
-        track = results['item']
-        track_name = track['name']
-        artist_name = track['artists'][0]['name']
-        await ctx.send(f"Currently playing: {track_name} by {artist_name}")
-    else:
-        await ctx.send("Nothing is currently playing on Spotify.")
+# ============================
+# Spotify Commands Category
+# ============================
+@bot.group(name='spotify', invoke_without_command=True)
+async def spotify(ctx):
+    """🎶 Spotify commands for music lovers!"""
+    await ctx.send_help(ctx.command)
 
-# 2. !spotify_search <track name>: Searches for a track on Spotify and returns the top result.
-@bot.command(name='spotify_search')
-async def spotify_search(ctx, *, query: str):
-    """Searches for a track on Spotify and returns the top result."""
-    entities, tokens = parse_command(query)  # Use spaCy to process the input
-    results = sp.search(q=query, limit=1, type='track')
-    if results['tracks']['items']:
-        track = results['tracks']['items'][0]
-        track_name = track['name']
-        artist_name = track['artists'][0]['name']
-        track_url = track['external_urls']['spotify']
-        await ctx.send(f"Top result: {track_name} by {artist_name}\n{track_url}")
-    else:
-        await ctx.send("No results found.")
-        
+@spotify.command(name='play')
+async def play_spotify(ctx):
+    """▶️ Play Spotify!"""
+    try:
+        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            return
 
-# 3. !spotify_top_tracks <artist name>: Displays the top tracks for a given artist.
-@bot.command(name='spotify_top_tracks')
-async def spotify_top_tracks(ctx, *, artist_name: str):
-    """Displays the top tracks of a given artist."""
-    results = sp.search(q=f"artist:{artist_name}", type='artist', limit=1)
-    if results['artists']['items']:
-        artist = results['artists']['items'][0]
-        artist_id = artist['id']
-        top_tracks = sp.artist_top_tracks(artist_id)['tracks']
-        
-        if top_tracks:
-            message = f"Top tracks for {artist['name']}:\n"
-            for i, track in enumerate(top_tracks[:5]):
-                track_name = track['name']
-                track_url = track['external_urls']['spotify']
-                message += f"{i + 1}. {track_name} - {track_url}\n"
-            await ctx.send(message)
-        else:
-            await ctx.send(f"No top tracks found for {artist_name}.")
-    else:
-        await ctx.send(f"Artist {artist_name} not found.")
+        sp = spotipy.Spotify(auth=token_info['access_token'])
+        sp.start_playback()
+        await ctx.send(f"{ctx.author.mention}, started Spotify playback. 🎶")
+    except Exception as e:
+        await ctx.send(f"Error starting playback: {e}")
 
-@bot.command(name='spotify_pause')
-async def spotify_pause(ctx):
-    devices = sp.devices()
-    if devices['devices']:
+@spotify.command(name='pause')
+async def pause_spotify(ctx):
+    """⏸️ Pause Spotify playback."""
+    try:
+        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            return
+
+        sp = spotipy.Spotify(auth=token_info['access_token'])
         sp.pause_playback()
-        await ctx.send("Spotify playback paused.")
-    else:
-        await ctx.send("No active Spotify devices found.")
+        await ctx.send(f"{ctx.author.mention}, paused Spotify playback. ⏸️")
+    except Exception as e:
+        await ctx.send(f"Error pausing playback: {e}")
 
-# 4. !authorize_spotify: Initiates the Spotify OAuth authorization process.
-@bot.command(name='authorize_spotify')
-async def authorize_spotify(ctx):
-    """Initiates Spotify OAuth authorization."""
-    auth_url = sp_oauth.get_authorize_url()
-    webbrowser.open(auth_url)
-    await ctx.send(f"Please authorize Spotify by clicking on this link: {auth_url}")
+@spotify.command(name='current')
+async def spotify_current(ctx):
+    """🎵 Display the currently playing track on Spotify."""
+    try:
+        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            return
 
-# 5. !spotify_play: Starts playback on an active Spotify device (after authorization).
-@bot.command(name='spotify_play')
-async def spotify_play(ctx):
-    """Starts playback on an active Spotify device."""
-    if spotify_token is None:
-        await ctx.send("You need to authorize Spotify first using !authorize_spotify.")
-        return
-    sp_user = spotipy.Spotify(auth=spotify_token)
-    devices = sp_user.devices()
-    if not devices['devices']:
-        await ctx.send("No active Spotify devices found.")
-    else:
-        sp_user.start_playback()
-        await ctx.send("Playback started!")
+        sp = spotipy.Spotify(auth=token_info['access_token'])
+        current_track = sp.current_playback()
+        if current_track and current_track['is_playing']:
+            track_name = current_track['item']['name']
+            artist_name = current_track['item']['artists'][0]['name']
+            await ctx.send(f"Now playing: '{track_name}' by {artist_name} 🎵")
+        else:
+            await ctx.send("No track is currently playing.")
+    except Exception as e:
+        await ctx.send(f"Error retrieving current playback: {e}")
 
 # Command to join the voice channel
 @bot.command(name='join')
@@ -582,23 +679,6 @@ async def leave_voice(ctx):
         await ctx.send("Disconnected from the voice channel.")
     else:
         await ctx.send("I'm not in a voice channel!")
-
-# Command to play a track from Spotify in the VC
-@bot.command(name='play_spotify')
-async def play_spotify(ctx, *, track_name: str):
-    # Search for the track on Spotify
-    results = sp.search(q=track_name, type='track', limit=1)
-    if results['tracks']['items']:
-        track = results['tracks']['items'][0]
-        track_url = track['external_urls']['spotify']
-        await ctx.send(f"Playing {track['name']} by {track['artists'][0]['name']} - {track_url}")
-        
-        # If bot is connected to a VC, stream music (Note: Spotify playback API does not directly support streaming into Discord VC)
-        if ctx.voice_client:
-            await ctx.send("Sorry, Spotify API doesn't allow streaming directly into Discord VC.")
-            # You'll need another way to play audio, such as using FFMPEG or local files.
-    else:
-        await ctx.send("Couldn't find that track on Spotify.")
 
 # Check if 'ask' command is already registered
 existing_command = bot.get_command('ask')
@@ -674,37 +754,6 @@ async def profile_command(ctx):
         await ctx.send(f"Here's your profile, {ctx.author.name}:\nTotal points: {total_points}, Level: {level}, Badges: {badge_str}")
         rl_module.update_q_table(user_state, action, reward=0)  # Neutral reward for no action
 
-@bot.command(name='leaderboard')
-async def leaderboard_command(ctx):
-    """Displays the top 5 users with the most points, and uses RL to randomly reward users."""
-    # Sort the users by points in descending order
-    leaderboard = sorted(gamification.user_rewards.items(), key=lambda item: item[1], reverse=True)[:5]
-
-    if not leaderboard:
-        await ctx.send("No rewards data yet.")
-        return
-
-    # Create the leaderboard message
-    message = "**🏆 Leaderboard 🏆**\n"
-    for rank, (user_id, points) in enumerate(leaderboard, 1):
-        user = await bot.fetch_user(user_id)  # Fetch the Discord user object
-        if user:  # Check if user was found
-            username = user.name  # Get the username from the user object
-        else:
-            username = str(user_id)  # Fallback to user ID if username can't be fetched
-
-        message += f"{rank}. {username} - {points} points\n"
-
-        # Apply RL action to possibly reward the leaderboard users
-        user_state = f"leaderboard_{username}"
-        action = rl_module.choose_action(user_state)
-        if action == 'reward_user':
-            gamification.reward_user(user_id, 5)
-            message += f"{username} received a 5-point reward!\n"
-        elif action == 'provide_tip':
-            message += f"{username}, keep up the good work to stay on top!\n"
-
-    await ctx.send(message)
 
 # Handle @mention or DM interactions
 @bot.event
