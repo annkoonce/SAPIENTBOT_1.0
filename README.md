@@ -34,9 +34,29 @@ To get started with SAPIENTBOT, follow these steps:
 
 SAPIENTBOT supports the following commands:
 
-- `!hello`: Greets the user.
-- `!time`: Provides the current time.
-- `!trivia`: Starts a trivia game.
+8ball       
+  answer      
+  ask         
+  compliment  
+  dadjoke     
+  flip        
+  fun         🎉 Fun commands to lighten up your day!
+  help        Shows this message
+  join        
+  leave       
+  motivate    
+  points      
+  profile     Displays the user's profile and integrates RL action selection.
+  quiz        
+  quiz_answer 
+  riddle      
+  roll        
+  rps         
+  spotify     🎶 Spotify commands for music lovers!
+  talk        
+  trivia      
+
+Type !help command for more info on a command.
 
 ## Contributing
 
@@ -45,11 +65,6 @@ Contributions to SAPIENTBOT are welcome! If you have ideas for new features, imp
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Special thanks to [OpenAI](https://openai.com) for providing cutting-edge AI technologies.
-- Inspired by other chatbots and virtual assistants in the industry.
 
 ## Roadmap
 
