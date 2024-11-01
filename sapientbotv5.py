@@ -27,6 +27,7 @@ import google
 import requests
 import praw
 import webbrowser
+from multiprocessing import Process
 
 
 # Load environment variables
@@ -36,10 +37,25 @@ load_dotenv()
 nlp = spacy.load('en_core_web_sm')
 matcher = Matcher(nlp.vocab)
 
+# Initialize dictionary to store cumulative response times for each command
+command_times = {}
+
 # Setup logging to write to a file
 logging.basicConfig(filename='sapientbot_response_times.log',
                     level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Function to log response time with cumulative tracking
+def log_response_time(command_name, response_time):
+    if command_name not in command_times:
+        command_times[command_name] = {'sum': 0, 'count': 0}
+    
+    command_times[command_name]['sum'] += response_time
+    command_times[command_name]['count'] += 1
+    average_time = command_times[command_name]['sum'] / command_times[command_name]['count']
+    
+    logging.info(f"Command: {command_name} | Response Time: {response_time:.2f} seconds | Average: {average_time:.2f} seconds")
+
 
 # Track user command history
 user_command_history = {}
@@ -106,12 +122,19 @@ class GamificationSystem:
 # Create instances of RLModule and GamificationSystem
 gamification = GamificationSystem()
 
+# Optimized Spotify token retrieval function
+def get_spotify_token():
+    token_info = sp_oauth.get_cached_token()
+    if not token_info:
+        token_info = sp_oauth.get_access_token(as_dict=False)
+    return token_info['access_token']
+
 # Bot Token and API keys
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
-SERP_API_ID = os.getenv('SERP_API_ID')
+#SERP_API_ID = os.getenv('SERP_API_ID')
 OPEN_API_ID = os.getenv('OPEN_API_ID')
 
 # File to store user data
@@ -436,8 +459,13 @@ async def roll_dice(ctx, dice: str):
 @bot.command(name='trivia')
 async def trivia(ctx):
     url = "https://opentdb.com/api.php?amount=1&type=multiple"
-    response = requests.get(url).json()
+    try:
+        response = requests.get(url).json()
+    except requests.RequestException as e:
+        await ctx.send("Couldn't fetch a trivia question at the moment. Please try again later.")
+        return
 
+    # Proceed with processing the response as before
     if response['response_code'] == 0:
         question = response['results'][0]['question']
         options = response['results'][0]['incorrect_answers']
@@ -561,9 +589,6 @@ class TestBotFunctions(unittest.TestCase):
         result = analyze_sentiment(text)
         self.assertEqual(result, "neutral")
 
-# Spotify Authentication for public commands (searching, top tracks)
-sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET))
-
 # Reinforcement Learning Module
 class RLModule:
     def __init__(self):
@@ -606,52 +631,55 @@ def parse_command(text):
 # ============================
 # Spotify Commands Category
 # ============================
+# Spotify Authentication for public commands (searching, top tracks)
+sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET))
+
+# Define the Spotify command group
 @bot.group(name='spotify', invoke_without_command=True)
 async def spotify(ctx):
     """🎶 Spotify commands for music lovers!"""
     await ctx.send_help(ctx.command)
 
+# Define the authorize command within the spotify group
+@spotify.command(name='authorize')
+async def authorize_spotify(ctx):
+    """🔗 Provides the Spotify authorization URL for first-time users."""
+    auth_url = sp_oauth.get_authorize_url()
+    await ctx.send(f"Please authorize the bot to access Spotify by visiting this link: {auth_url}")
+
+# Define the play command within the spotify group
 @spotify.command(name='play')
 async def play_spotify(ctx):
     """▶️ Play Spotify!"""
     try:
-        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
-        if not token_info:
-            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
-            return
-
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        token = get_spotify_token()
+        sp = spotipy.Spotify(auth=token)
         sp.start_playback()
         await ctx.send(f"{ctx.author.mention}, started Spotify playback. 🎶")
     except Exception as e:
         await ctx.send(f"Error starting playback: {e}")
 
+# Define the pause command within the spotify group
 @spotify.command(name='pause')
 async def pause_spotify(ctx):
     """⏸️ Pause Spotify playback."""
     try:
-        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
-        if not token_info:
-            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
-            return
-
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        token = get_spotify_token()
+        sp = spotipy.Spotify(auth=token)
         sp.pause_playback()
         await ctx.send(f"{ctx.author.mention}, paused Spotify playback. ⏸️")
     except Exception as e:
         await ctx.send(f"Error pausing playback: {e}")
 
+# Define the current command within the spotify group
 @spotify.command(name='current')
 async def spotify_current(ctx):
     """🎵 Display the currently playing track on Spotify."""
     try:
-        token_info = SpotifyOAuth(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=SPOTIPY_REDIRECT_URI).get_cached_token()
-        if not token_info:
-            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
-            return
-
-        sp = spotipy.Spotify(auth=token_info['access_token'])
+        token = get_spotify_token()
+        sp = spotipy.Spotify(auth=token)
         current_track = sp.current_playback()
+        
         if current_track and current_track['is_playing']:
             track_name = current_track['item']['name']
             artist_name = current_track['item']['artists'][0]['name']
@@ -660,6 +688,7 @@ async def spotify_current(ctx):
             await ctx.send("No track is currently playing.")
     except Exception as e:
         await ctx.send(f"Error retrieving current playback: {e}")
+
 
 # Command to join the voice channel
 @bot.command(name='join')
@@ -817,12 +846,15 @@ async def on_command_error(ctx, error):
         await ctx.send(f"An error occurred: {str(error)}")
 
 # Run Flask server for Spotify OAuth in a background thread
+from multiprocessing import Process
+
+# Run Flask server in a separate process
 def run_flask():
     app.run(port=8888)
 
-# Run Flask server in a background thread
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.start()
+flask_process = Process(target=run_flask)
+flask_process.start()
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
