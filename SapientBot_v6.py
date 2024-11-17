@@ -18,6 +18,8 @@ import praw
 import openai
 import atexit
 import html
+import sapientbot_db
+import sqlite3
 
 from multiprocessing import Process
 from googlesearch import search
@@ -44,6 +46,34 @@ from spacy.training import Example
 from state_manager import get_user_state, set_user_state, clear_user_state
 from intent_recognizer import recognize_intent
 from response_generator import generate_response, analyze_sentiment
+from sapientbot_db import (add_or_update_user, get_user_data, update_points, get_user_badges, assign_badge, award_daily_bonus, get_leaderboard)
+from chatterbot import ChatBot
+from chatterbot.trainers import ChatterBotCorpusTrainer
+from sapientbot_db import connect_db, update_points
+
+def connect_db():
+    conn = sqlite3.connect('sapientbot.db')  # Path to your database file
+    cursor = conn.cursor()
+    return conn, cursor
+def set_user_preference_in_memory(user_id, key, value):
+    if user_id not in user_preferences:
+        user_preferences[user_id] = {}
+    user_preferences[user_id][key] = value
+
+def get_user_preference_in_memory(user_id, key):
+    if user_id in user_preferences and key in user_preferences[user_id]:
+        return user_preferences[user_id][key]
+    return None
+
+def save_feedback_in_memory(user_id, query, response, feedback):
+    user_feedback.append({
+        "user_id": user_id,
+        "query": query,
+        "response": response,
+        "feedback": feedback,
+        "timestamp": datetime.now().isoformat()
+    })
+
 # ============================0
 # Load environment variables and initialize bot
 # ============================
@@ -54,15 +84,35 @@ SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI')
 
+
+sp = spotipy.Spotify(client_credentials_manager=SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET))
+
 # Set up Discord bot with intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# In-memory storage for user preferences and feedback
+user_preferences = {}
+user_feedback = []
+
 # Initialize spaCy and matcher
 nlp = spacy.load('en_core_web_sm')
 nlp = spacy.blank("en")
 matcher = Matcher(nlp.vocab)
+
+# Initialize the chatbot
+chatbot = ChatBot(
+    'SAPIENTBOT',
+    storage_adapter='chatterbot.storage.SQLStorageAdapter',
+    database_uri='sqlite:///database.sqlite3'
+)
+
+# Set up a trainer for the bot
+trainer = ChatterBotCorpusTrainer(chatbot)
+
+# Train the chatbot on English corpus
+trainer.train("chatterbot.corpus.english")
 
 # Add a text classifier to the pipeline
 if "textcat" not in nlp.pipe_names:
@@ -147,20 +197,15 @@ QUIZ_COOLDOWN = timedelta(days=1)
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
-        return  # Ignore the bot's own messages
-
-    user_id = message.author.id
-    user_context[user_id] = recognize_intent(message.content)
-
-    # Check if message is a command
-    if message.content.startswith("!"):
-        await bot.process_commands(message)  # Process bot commands like !help, etc.
         return
 
-    # Recognize and respond to intents in natural language
-    intent = user_context[user_id]
-    response = generate_response(intent)
-    await message.channel.send(response)
+    # Check if the user prefers formal responses
+    preferred_tone = get_user_preference_in_memory(message.author.id, "tone")
+    if preferred_tone == "formal":
+        await message.channel.send("Good day to you. How may I assist?")
+    else:
+        await bot.process_commands(message)  # Ensure commands like !help work
+
 # ============================
 # Reinforcement Learning Module
 # ============================
@@ -210,6 +255,39 @@ def analyze_sentiment(text):
 @bot.command(name='hello')
 async def hello(ctx):
     await ctx.send("Hello! How can I assist you today?")
+    
+async def set_preference_command(ctx, key: str, value: str):
+    set_user_preference_in_memory(ctx.author.id, key, value)
+    await ctx.send(f"Preference '{key}' set to '{value}'.")
+    
+async def get_preference_command(ctx, key: str):
+    value = get_user_preference_in_memory(ctx.author.id, key)
+    if value:
+        await ctx.send(f"Your preference for '{key}' is '{value}'.")
+    else:
+        await ctx.send(f"No preference set for '{key}'.")
+        
+async def feedback_command(ctx, feedback: int, *, query: str):
+    response = chatbot.get_response(query)
+    save_feedback_in_memory(ctx.author.id, query, str(response), feedback)
+    await ctx.send("Thank you for your feedback!")
+
+@bot.command(name='analyze_feedback')
+@commands.has_role('Admin')  # Ensure only admins can use this   
+async def analyze_feedback_command(ctx):
+    if not user_feedback:
+        await ctx.send("No feedback recorded yet.")
+        return
+
+    for feedback in user_feedback[-10:]:  # Show the last 10 feedback entries
+        await ctx.send(
+            f"User: {feedback['user_id']}\n"
+            f"Query: {feedback['query']}\n"
+            f"Response: {feedback['response']}\n"
+            f"Feedback: {feedback['feedback']}\n"
+            f"Timestamp: {feedback['timestamp']}"
+        )
+
 # ============================
 # Gamification System
 # ============================
@@ -287,6 +365,7 @@ async def profile(ctx):
         )
     else:
         await ctx.send(f"{ctx.author.mention}, you don’t have any points yet. Start interacting to earn some!")
+
 # ============================
 # Fun Commands
 # ============================
@@ -342,30 +421,33 @@ async def trivia(ctx):
         await ctx.send("Couldn't fetch a trivia question at the moment. Please try again later.")
         return
 
-    # Process the trivia question
     if response['response_code'] == 0:
-        question = html.unescape(response['results'][0]['question'])  # Decode HTML entities
+        question = html.unescape(response['results'][0]['question'])
         options = [html.unescape(opt) for opt in response['results'][0]['incorrect_answers']]
         correct_answer = html.unescape(response['results'][0]['correct_answer'])
         options.append(correct_answer)
         random.shuffle(options)
-        
-        options_str = "\n".join([f"{idx + 1}. {opt}" for idx, opt in enumerate(options)])
 
+        options_str = "\n".join([f"{idx + 1}. {opt}" for idx, opt in enumerate(options)])
         await ctx.send(f"🧠 Trivia Time!\n{question}\n\n{options_str}\n\nType the number of your answer.")
 
-        # Function to check user's response
         def check(m):
             return m.author == ctx.author and m.content.isdigit()
 
         try:
-            answer = await bot.wait_for('message', check=check, timeout=15.0)
+            # Wait for the user's response without a time limit
+            answer = await bot.wait_for('message', check=check)
             if options[int(answer.content) - 1] == correct_answer:
-                await ctx.send("🎉 Correct! Great job.")
+                points = 50
+                user_id = str(ctx.author.id)
+                update_points(user_id, points)
+                user_data = get_user_data(user_id)
+                total_points = user_data['points']
+                await ctx.send(f"🎉 Correct! You've earned {points} points. Total Points: {total_points}")
             else:
-                await ctx.send(f"❌ Sorry, the correct answer was: {correct_answer}")
-        except:
-            await ctx.send("⏰ Time's up!")
+                await ctx.send(f"❌ Incorrect! The correct answer was: {correct_answer}")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {str(e)}")
     else:
         await ctx.send("Couldn't fetch a trivia question. Try again later.")
 
@@ -506,55 +588,87 @@ async def music(ctx):
     """🎶 Music commands for Spotify control."""
     await ctx.send("Available music commands: authorize, play, pause, current. Use !music <command> to control Spotify playback.")
 
-# Command to authorize Spotify
-@music.command(name='authorize')
-async def authorize_spotify(ctx):
-    """🔗 Provides the Spotify authorization URL for first-time users."""
-    auth_url = sp_oauth.get_authorize_url()
-    await ctx.send(f"Please authorize the bot to access Spotify by visiting this link: {auth_url}")
-
-# Command to play Spotify music
-@music.command(name='play')
-async def play_spotify(ctx):
-    """▶️ Play Spotify!"""
+# Spotify Commands
+@bot.command(name='spotify_play')
+async def spotify_play(ctx):
     try:
-        token = get_spotify_token()
-        sp = spotipy.Spotify(auth=token)
+        token_info = sp_oauth.get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            auth_url = sp_oauth.get_authorize_url()
+            webbrowser.open(auth_url)
+            await ctx.send(f"Authenticate here: {auth_url}")
+            return
+
+        sp = spotipy.Spotify(auth=token_info['access_token'])
         sp.start_playback()
-        await ctx.send(f"{ctx.author.mention}, started Spotify playback. 🎶")
+        await ctx.send(f"{ctx.author.mention}, started Spotify playback.")
     except Exception as e:
         await ctx.send(f"Error starting playback: {e}")
 
-# Command to pause Spotify music
-@music.command(name='pause')
-async def pause_spotify(ctx):
-    """⏸️ Pause Spotify playback."""
+@bot.command(name='spotify_pause')
+async def spotify_pause(ctx):
     try:
-        token = get_spotify_token()
-        sp = spotipy.Spotify(auth=token)
+        token_info = sp_oauth.get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            auth_url = sp_oauth.get_authorize_url()
+            webbrowser.open(auth_url)
+            await ctx.send(f"Authenticate here: {auth_url}")
+            return
+
+        sp = spotipy.Spotify(auth=token_info['access_token'])
         sp.pause_playback()
-        await ctx.send(f"{ctx.author.mention}, paused Spotify playback. ⏸️")
+        await ctx.send(f"{ctx.author.mention}, paused Spotify playback.")
     except Exception as e:
         await ctx.send(f"Error pausing playback: {e}")
 
-# Command to display the currently playing Spotify track
-@music.command(name='current')
-async def spotify_current(ctx):
-    """🎵 Display the currently playing track on Spotify."""
+@bot.command(name='spotify_now')
+async def spotify_now_playing(ctx):
     try:
-        token = get_spotify_token()
-        sp = spotipy.Spotify(auth=token)
+        token_info = sp_oauth.get_cached_token()
+        if not token_info:
+            await ctx.send("Please authenticate Spotify by visiting the URL provided.")
+            auth_url = sp_oauth.get_authorize_url()
+            webbrowser.open(auth_url)
+            await ctx.send(f"Authenticate here: {auth_url}")
+            return
+
+        sp = spotipy.Spotify(auth=token_info['access_token'])
         current_track = sp.current_playback()
-        
         if current_track and current_track['is_playing']:
             track_name = current_track['item']['name']
             artist_name = current_track['item']['artists'][0]['name']
-            await ctx.send(f"Now playing: '{track_name}' by {artist_name} 🎵")
+            await ctx.send(f"Now playing: '{track_name}' by {artist_name}")
         else:
             await ctx.send("No track is currently playing.")
     except Exception as e:
         await ctx.send(f"Error retrieving current playback: {e}")
         
+# ============================
+# Logging & Debugging
+# ============================     
+logging.basicConfig(level=logging.INFO)
+
+# Setup logging to write to a rotating file
+log_handler = RotatingFileHandler('sapientbot_response_times.log', maxBytes=5*1024*1024, backupCount=5)
+logging.basicConfig(handlers=[log_handler], level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Track user command history
+user_command_history = {}
+
+def update_points(user_id, points):
+    conn, cursor = connect_db()
+    cursor.execute(
+        "UPDATE users SET points = points + ? WHERE user_id = ?",
+        (points, user_id)
+    )
+    conn.commit()
+    cursor.execute("SELECT points FROM users WHERE user_id = ?", (user_id,))
+    new_points = cursor.fetchone()[0]
+    print(f"Updated points for user {user_id}: {new_points}")  # Debugging line
+    conn.close()
+
 # ============================
 # Close Database Connection on Exit
 # ============================    
